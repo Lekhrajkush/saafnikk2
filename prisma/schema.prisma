@@ -1,0 +1,293 @@
+// Saafnikk — database schema
+// Dev: SQLite (file:./dev.db). For production, switch provider to "postgresql"
+// and set DATABASE_URL to your Postgres connection string (e.g. Neon, Supabase, RDS).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Auth ----------
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  username      String   @unique
+  email         String   @unique
+  passwordHash  String
+  bio           String?
+  avatarUrl     String?
+  role          Role     @default(USER)
+  city          String?
+  state         String?
+  institution   String?  // school / college name, for school committees
+  institutionType InstitutionType?
+  points        Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  drivesCreated     Drive[]            @relation("DriveLeader")
+  driveParticipants DriveParticipant[]
+  reports           Report[]
+  reels             Reel[]
+  reelLikes         ReelLike[]
+  comments          Comment[]
+
+  following   Follow[] @relation("FollowingRelation")
+  followers   Follow[] @relation("FollowerRelation")
+
+  notifications       Notification[] @relation("NotificationRecipient")
+  notificationsSent   Notification[] @relation("NotificationActor")
+
+  wallet   Wallet?
+  sponsorships Sponsorship[]
+}
+
+enum Role {
+  USER
+  DRIVE_LEADER
+  SCHOOL_ADMIN
+  ADMIN
+}
+
+enum InstitutionType {
+  SCHOOL
+  COLLEGE
+  NGO
+  COMPANY
+  OTHER
+}
+
+// ---------- Drives (clean-up / plantation events) ----------
+
+model Drive {
+  id          String      @id @default(cuid())
+  title       String
+  description String
+  category    DriveCategory @default(CLEANUP)
+  coverImage  String?
+  locationName String
+  address     String?
+  latitude    Float
+  longitude   Float
+  startTime   DateTime
+  endTime     DateTime
+  capacity    Int?
+  status      DriveStatus @default(UPCOMING)
+  isSponsored Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  leaderId String
+  leader   User   @relation("DriveLeader", fields: [leaderId], references: [id])
+
+  participants DriveParticipant[]
+  sponsorship  Sponsorship?
+  reports      Report[]
+}
+
+enum DriveCategory {
+  CLEANUP
+  PLANTATION
+  AWARENESS
+  RECYCLING
+  OTHER
+}
+
+enum DriveStatus {
+  UPCOMING
+  ONGOING
+  COMPLETED
+  CANCELLED
+}
+
+model DriveParticipant {
+  id       String   @id @default(cuid())
+  driveId  String
+  userId   String
+  joinedAt DateTime @default(now())
+  attended Boolean  @default(false)
+
+  drive Drive @relation(fields: [driveId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([driveId, userId])
+}
+
+// ---------- Report a dirty spot ----------
+
+model Report {
+  id          String       @id @default(cuid())
+  title       String
+  description String?
+  imageUrl    String
+  latitude    Float
+  longitude   Float
+  locationName String?
+  status      ReportStatus @default(OPEN)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  reporterId String
+  reporter   User   @relation(fields: [reporterId], references: [id])
+
+  linkedDriveId String?
+  linkedDrive   Drive?  @relation(fields: [linkedDriveId], references: [id])
+}
+
+enum ReportStatus {
+  OPEN
+  DRIVE_SCHEDULED
+  RESOLVED
+  REJECTED
+}
+
+// ---------- Reels (short video / photo updates) ----------
+
+model Reel {
+  id          String   @id @default(cuid())
+  caption     String?
+  mediaUrl    String
+  mediaType   MediaType @default(VIDEO)
+  thumbnailUrl String?
+  viewCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  likes    ReelLike[]
+  comments Comment[]
+}
+
+enum MediaType {
+  VIDEO
+  IMAGE
+}
+
+model ReelLike {
+  id     String @id @default(cuid())
+  reelId String
+  userId String
+
+  reel Reel @relation(fields: [reelId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([reelId, userId])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  text      String
+  createdAt DateTime @default(now())
+
+  reelId String
+  reel   Reel   @relation(fields: [reelId], references: [id], onDelete: Cascade)
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+}
+
+// ---------- Social graph ----------
+
+model Follow {
+  id          String @id @default(cuid())
+  followerId  String
+  followingId String
+
+  follower  User @relation("FollowerRelation", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("FollowingRelation", fields: [followingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([followerId, followingId])
+}
+
+// ---------- Notifications ----------
+
+model Notification {
+  id        String           @id @default(cuid())
+  type      NotificationType
+  message   String
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+  linkUrl   String?
+
+  recipientId String
+  recipient   User   @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  actorId String?
+  actor   User?   @relation("NotificationActor", fields: [actorId], references: [id])
+}
+
+enum NotificationType {
+  NEW_FOLLOWER
+  DRIVE_REMINDER
+  DRIVE_UPDATE
+  REPORT_STATUS
+  REEL_LIKE
+  REEL_COMMENT
+  PAYOUT
+  SYSTEM
+}
+
+// ---------- Revenue / wallet ----------
+
+model Wallet {
+  id        String   @id @default(cuid())
+  balance   Float    @default(0)
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  updatedAt DateTime @updatedAt
+
+  transactions Transaction[]
+}
+
+model Transaction {
+  id        String            @id @default(cuid())
+  walletId  String
+  wallet    Wallet            @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  amount    Float
+  type      TransactionType
+  status    TransactionStatus @default(PENDING)
+  note      String?
+  createdAt DateTime          @default(now())
+}
+
+enum TransactionType {
+  EARNING
+  WITHDRAWAL
+  SPONSORSHIP_PAYOUT
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+// ---------- Sponsorships ----------
+
+model Sponsorship {
+  id          String            @id @default(cuid())
+  driveId     String            @unique
+  drive       Drive             @relation(fields: [driveId], references: [id], onDelete: Cascade)
+  sponsorId   String
+  sponsor     User              @relation(fields: [sponsorId], references: [id])
+  amount      Float
+  status      SponsorshipStatus @default(PENDING)
+  createdAt   DateTime          @default(now())
+}
+
+enum SponsorshipStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
